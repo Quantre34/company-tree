@@ -1,0 +1,29 @@
+DirectoryIndex index.html
+
+# Block source folder from web access (even under a sub-path deployment)
+RewriteEngine On
+RewriteRule ^_source(/.*)?$ - [F,L]
+RedirectMatch 403 (?i)/_source(/|$)
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css application/javascript application/json image/svg+xml
+</IfModule>
+
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType application/javascript "access plus 1 year"
+  ExpiresByType text/css "access plus 1 year"
+  ExpiresByType image/svg+xml "access plus 1 month"
+</IfModule>
+
+<Files ~ "\.(json|md)$">
+  # Allow index.html to reference assets; block bare doc files at root
+  Require all granted
+</Files>
+
+# SPA fallback (in case we ever add hash routing, we still serve index.html)
+<IfModule mod_rewrite.c>
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.html [L]
+</IfModule>

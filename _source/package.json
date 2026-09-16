@@ -1,0 +1,33 @@
+{
+  "name": "company-tree",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Single-page encrypted org-chart editor with drag-and-drop, PDF/Excel export, and per-node images.",
+  "author": "Recep Özmen",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/Quantre34/company-tree.git" },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "immer": "^10.1.1",
+    "jspdf": "^2.5.2",
+    "nanoid": "^5.0.9",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "svg2pdf.js": "^2.4.0",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}
