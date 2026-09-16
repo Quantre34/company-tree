@@ -53,6 +53,9 @@ export function layout(doc: OrgDoc): LayoutResult {
 
   const childrenMap = new Map<string | null, OrgNode[]>();
   for (const n of nodes) {
+    // Floating (unattached) nodes are placed absolutely — do not enrol them as
+    // children of anyone, and do not treat them as root candidates.
+    if (n.unattached) continue;
     const arr = childrenMap.get(n.parentId) ?? [];
     arr.push(n);
     childrenMap.set(n.parentId, arr);
@@ -156,8 +159,16 @@ export function layout(doc: OrgDoc): LayoutResult {
     }
   }
 
-  const root = nodes.find(n => n.parentId === null);
+  const root = nodes.find(n => n.parentId === null && !n.unattached);
   if (root) place(root.id, 40, 40);
+
+  // Floating nodes: run a sub-tree layout starting at each unattached node's
+  // own coordinates. Descendants come along so a whole detached subtree stays
+  // visually cohesive during / after a drag.
+  for (const n of nodes) {
+    if (!n.unattached) continue;
+    place(n.id, n.unattached.x, n.unattached.y);
+  }
 
   let maxX = 0, maxY = 0;
   for (const b of boxes) {

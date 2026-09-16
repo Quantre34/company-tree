@@ -9,9 +9,13 @@ interface Props {
   onSelect: (id: string) => void;
   onAddChild?: (id: string) => void;
   interactive?: boolean;
+  /** Called on pointerdown for any draggable node. Canvas decides whether to start a drag. */
+  onFloatingPointerDown?: (id: string, e: React.PointerEvent) => void;
+  dropTarget?: boolean;
+  ghosting?: boolean;
 }
 
-export function NodeBox({ box, theme, selected, onSelect, onAddChild, interactive = true }: Props) {
+export function NodeBox({ box, theme, selected, onSelect, onAddChild, interactive = true, onFloatingPointerDown, dropTarget, ghosting }: Props) {
   const n = box.node;
   const style = n.style ?? {};
   const rx = style.shape === 'sharp' ? 0 : style.shape === 'pill' ? Math.min(box.h / 2, 20) : 10;
@@ -21,15 +25,39 @@ export function NodeBox({ box, theme, selected, onSelect, onAddChild, interactiv
   const headerFill = style.headerFill ?? theme.primary;
 
   const inner = box.inner;
+  const isFloating = !!n.unattached;
+  const isRoot = n.parentId === null && !isFloating;
+  const draggable = interactive && !isRoot;
+  const dashed = isFloating ? '6 4' : undefined;
+  const frameStroke = dropTarget ? theme.accent : (isFloating ? theme.primary : stroke);
+  const frameStrokeWidth = dropTarget ? 3 : (isFloating ? 1.8 : 1);
 
   return (
     <g
-      className={'node-shell' + (selected ? ' selected' : '')}
+      className={
+        'node-shell'
+        + (selected ? ' selected' : '')
+        + (isFloating ? ' floating' : '')
+        + (draggable ? ' draggable' : '')
+        + (dropTarget ? ' drop-target' : '')
+        + (ghosting ? ' ghosting' : '')
+      }
       transform={`translate(${box.x}, ${box.y})`}
       onClick={interactive ? (e) => { e.stopPropagation(); onSelect(n.id); } : undefined}
-      style={{ cursor: interactive ? 'pointer' : 'default' }}
+      onPointerDown={interactive && onFloatingPointerDown
+        ? (e) => { e.stopPropagation(); onFloatingPointerDown(n.id, e); }
+        : undefined}
+      style={{
+        cursor: draggable ? 'grab' : (interactive ? 'pointer' : 'default'),
+        opacity: ghosting ? 0.55 : 1,
+      }}
     >
-      <rect className="frame" width={box.w} height={box.h} rx={rx} ry={rx} fill={fill} stroke={stroke} />
+      <rect
+        className="frame"
+        width={box.w} height={box.h} rx={rx} ry={rx}
+        fill={fill} stroke={frameStroke} strokeWidth={frameStrokeWidth}
+        strokeDasharray={dashed}
+      />
 
       {inner.hasBanner && (() => {
         const totalTitleH = inner.titleLines.length * TITLE_LINE_H;

@@ -41,6 +41,7 @@ export default function App() {
   const undo = useOrgStore(s => s.undo);
   const redo = useOrgStore(s => s.redo);
   const addChild = useOrgStore(s => s.addChild);
+  const addFloating = useOrgStore(s => s.addFloating);
 
   const [vaultMode, setVaultMode] = useState<VaultMode>('checking');
   const [fatalMsg, setFatalMsg] = useState<string | null>(null);
@@ -283,6 +284,12 @@ export default function App() {
         onExportBackup={onExportBackup}
         onImportBackup={onImportBackup}
         onAddRootChild={() => rootId && addChild(rootId)}
+        onAddFloating={() => {
+          // Drop a new floating node roughly where the tree ends, so it's
+          // visible but doesn't overlap the root of the hierarchy.
+          const b = document.querySelector<SVGSVGElement>('.canvas-wrap svg')?.getBoundingClientRect();
+          addFloating({ x: (b ? 60 : 60), y: 60 });
+        }}
         saveState={saveState}
       />
       <div className="main-split">

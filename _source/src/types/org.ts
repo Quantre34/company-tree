@@ -32,6 +32,13 @@ export interface OrgNode {
   collapsed?: boolean;
   layoutMode?: 'horizontal' | 'stacked';
   style?: NodeStyle;
+  /**
+   * If set, this node is "floating" — not part of the tree hierarchy.
+   * The layout engine skips it during tree traversal and places it at the
+   * supplied absolute canvas coordinates. Dropping it on a tree node clears
+   * this field and assigns a parentId.
+   */
+  unattached?: { x: number; y: number };
 }
 
 export interface Theme {

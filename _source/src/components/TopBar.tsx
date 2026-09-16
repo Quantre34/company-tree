@@ -9,6 +9,7 @@ interface Props {
   onExportBackup: () => void;
   onImportBackup: () => void;
   onAddRootChild: () => void;
+  onAddFloating: () => void;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
 }
 
@@ -38,6 +39,9 @@ export function TopBar(p: Props) {
       <button className="ghost" onClick={undo} disabled={!canUndo} title="Geri al (Ctrl+Z)">↶</button>
       <button className="ghost" onClick={redo} disabled={!canRedo} title="Yinele (Ctrl+Shift+Z)">↷</button>
       <button onClick={p.onAddRootChild} title="Köke alt birim ekle">+ Kök Alt</button>
+      <button onClick={p.onAddFloating} title="Serbest (bağlı olmayan) kutu ekle — sonradan sürükleyip başka kutuya bağlarsın">
+        + Serbest Kutu
+      </button>
       <button onClick={p.onSave} title="Kaydet (Ctrl+S)">
         💾 {p.saveState === 'saving' ? 'Kaydediliyor…' : p.saveState === 'saved' ? 'Kaydedildi' : 'Kaydet'}
       </button>

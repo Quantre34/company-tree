@@ -37,6 +37,11 @@ interface OrgState {
 
   addChild: (parentId: string, type?: NodeType) => string;
   addSibling: (nodeId: string, type?: NodeType) => string | null;
+  addFloating: (at: { x: number; y: number }, type?: NodeType) => string;
+  setUnattachedPosition: (id: string, x: number, y: number) => void;
+  attachFloatingAsChild: (id: string, parentId: string) => void;
+  /** Detach a tree node into floating state at (x,y). No-op for root. */
+  detachToFloating: (id: string, at: { x: number; y: number }) => void;
   deleteNode: (id: string, promoteChildren: boolean) => void;
   moveUp: (id: string) => void;
   moveDown: (id: string) => void;
@@ -131,6 +136,74 @@ export const useOrgStore = create<OrgState>((set, get) => {
       const target = state.doc.nodes.find(n => n.id === nodeId);
       if (!target || target.parentId === null) return null;
       return get().addChild(target.parentId, type);
+    },
+
+    addFloating: (at, type = 'department') => {
+      const id = 'n_' + nanoid(6);
+      mutate(s => {
+        const newNode: OrgNode = {
+          id, parentId: null, order: 0, type,
+          title: 'YENİ BİRİM',
+          subtitle: type === 'department' ? 'YÖNETİCİ' : undefined,
+          people: [],
+          layoutMode: 'stacked',
+          unattached: { x: Math.round(at.x), y: Math.round(at.y) },
+        };
+        s.doc.nodes.push(newNode);
+        s.selectedId = id;
+      }, true);
+      return id;
+    },
+
+    setUnattachedPosition: (id, x, y) => {
+      // Frequent (per-pointermove) updates — skip history snapshot; the final
+      // release will snapshot via attachFloatingAsChild or user editing.
+      mutate(s => {
+        const n = s.doc.nodes.find(x => x.id === id);
+        if (!n || !n.unattached) return;
+        n.unattached.x = Math.round(x);
+        n.unattached.y = Math.round(y);
+      }, false);
+    },
+
+    detachToFloating: (id, at) => {
+      const state = get();
+      const n = state.doc.nodes.find(x => x.id === id);
+      if (!n) return;
+      // Root (parentId=null, not already floating) cannot be detached.
+      if (n.parentId === null && !n.unattached) return;
+      if (n.unattached) return; // already floating; just move it via setUnattachedPosition
+      mutate(s => {
+        const nn = s.doc.nodes.find(x => x.id === id);
+        if (!nn) return;
+        nn.unattached = { x: Math.round(at.x), y: Math.round(at.y) };
+      }, true);
+    },
+
+    attachFloatingAsChild: (id, parentId) => {
+      const state = get();
+      const node = state.doc.nodes.find(n => n.id === id);
+      const parent = state.doc.nodes.find(n => n.id === parentId);
+      if (!node || !parent || id === parentId) return;
+      // Cycle guard (should not happen for a floating node, but keep it safe).
+      let cur: string | null = parent.parentId;
+      const seen = new Set<string>();
+      while (cur) {
+        if (seen.has(cur)) return;
+        seen.add(cur);
+        if (cur === id) return;
+        const p = state.doc.nodes.find(x => x.id === cur);
+        cur = p?.parentId ?? null;
+      }
+      mutate(s => {
+        const n = s.doc.nodes.find(x => x.id === id);
+        if (!n) return;
+        n.parentId = parentId;
+        delete n.unattached;
+        const siblings = s.doc.nodes.filter(x => x.parentId === parentId && x.id !== id);
+        n.order = siblings.length ? Math.max(...siblings.map(x => x.order)) + 1 : 0;
+        s.selectedId = id;
+      }, true);
     },
 
     deleteNode: (id, promoteChildren) => {
