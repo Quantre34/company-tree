@@ -6,14 +6,29 @@ import { Inspector } from './components/Inspector';
 import { TopBar } from './components/TopBar';
 import { LockScreen, type OnboardingData } from './components/LockScreen';
 import { ConfirmDialog, DeleteDialog, ReparentDialog } from './components/Dialogs';
-import { hasVault, saveVault, loadVault, readMeta, clearVault } from './persistence/localVault';
+import {
+  hasServerVault,
+  loadServerVault,
+  saveServerVault,
+} from './persistence/serverVault';
 import { hasWebCrypto, isSecureContextOk } from './crypto/vault';
 import { exportEncryptedFile, importEncryptedFile, downloadAs } from './persistence/fileVault';
 import { exportXlsx } from './export/xlsx';
 import { PdfPreview } from './components/PdfPreview';
 import type { OrgDoc } from './types/org';
 
-type VaultMode = 'checking' | 'create' | 'unlock' | 'unlocked' | 'skip';
+/**
+ * Vault lives on the server (encrypted, zero-knowledge). Cookies /
+ * localStorage on the device don't hold the tree — clearing them just
+ * signs you out. The company is created ONCE (whoever first hits the
+ * domain), then every device just enters the password to unlock.
+ */
+type VaultMode =
+  | 'checking'     // probing the server
+  | 'create'       // no vault on server yet — first-time setup
+  | 'unlock'       // vault exists — enter password
+  | 'unlocked'     // in the app
+  | 'fatal';       // hard error (no HTTPS, no crypto, server unreachable)
 
 const AUTO_LOCK_MS = 15 * 60 * 1000;
 const AUTOSAVE_MS = 2000;
@@ -28,7 +43,9 @@ export default function App() {
   const addChild = useOrgStore(s => s.addChild);
 
   const [vaultMode, setVaultMode] = useState<VaultMode>('checking');
+  const [fatalMsg, setFatalMsg] = useState<string | null>(null);
   const passwordRef = useRef<string | null>(null);
+  const versionRef = useRef<string | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [dialog, setDialog] = useState<
     | { type: 'delete'; id: string }
@@ -40,41 +57,34 @@ export default function App() {
   >(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
-  // Vault-check on mount
+  // Vault-check on mount — the ONLY place we probe the server.
   useEffect(() => {
-    if (new URLSearchParams(location.search).get('nolock') === '1') {
-      setVaultMode('skip');
-      const raw = localStorage.getItem('rigicontree.plain.v1');
-      if (raw) try { loadDoc(JSON.parse(raw)); } catch {/* ignore */}
-      return;
-    }
-    if (!hasWebCrypto()) {
-      // Fall back to unencrypted local storage
-      setVaultMode('skip');
-      const raw = localStorage.getItem('rigicontree.plain.v1');
-      if (raw) try { loadDoc(JSON.parse(raw)); } catch {/* ignore */}
-      return;
-    }
-    if (!isSecureContextOk()) {
-      // No crypto available — go plain
-      setVaultMode('skip');
-      const raw = localStorage.getItem('rigicontree.plain.v1');
-      if (raw) try { loadDoc(JSON.parse(raw)); } catch {/* ignore */}
-      return;
-    }
-    setVaultMode(hasVault() ? 'unlock' : 'create');
+    (async () => {
+      if (!hasWebCrypto() || !isSecureContextOk()) {
+        setFatalMsg('Bu uygulama HTTPS gerektirir (parola şifreleme için).');
+        setVaultMode('fatal');
+        return;
+      }
+      try {
+        const exists = await hasServerVault();
+        setVaultMode(exists ? 'unlock' : 'create');
+      } catch (e: any) {
+        setFatalMsg('Sunucuya erişilemedi: ' + (e?.message ?? String(e)));
+        setVaultMode('fatal');
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Debounced autosave when dirty
   useEffect(() => {
-    if (!dirty) return;
+    if (!dirty || vaultMode !== 'unlocked') return;
     const t = setTimeout(() => { void doSave(); }, AUTOSAVE_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dirty, doc]);
+  }, [dirty, doc, vaultMode]);
 
-  // Auto-lock on inactivity (only when unlocked with a vault)
+  // Auto-lock on inactivity
   useEffect(() => {
     if (vaultMode !== 'unlocked') return;
     let timer: number | undefined;
@@ -108,46 +118,72 @@ export default function App() {
   }, []);
 
   const doSave = useCallback(async () => {
+    if (vaultMode !== 'unlocked' || !passwordRef.current) return;
     setSaveState('saving');
     try {
-      if (vaultMode === 'unlocked' && passwordRef.current) {
-        await saveVault(useOrgStore.getState().doc, passwordRef.current);
-      } else {
-        localStorage.setItem('rigicontree.plain.v1', JSON.stringify(useOrgStore.getState().doc));
-      }
+      const newVer = await saveServerVault(
+        useOrgStore.getState().doc,
+        passwordRef.current,
+        versionRef.current,
+      );
+      versionRef.current = newVer;
       markSaved();
       setSaveState('saved');
       setTimeout(() => setSaveState('idle'), 1200);
     } catch (e: any) {
       setSaveState('error');
-      setDialog({ type: 'error', message: 'Kayıt hatası: ' + (e?.message ?? String(e)) });
+      if (e?.code === 'CONFLICT') {
+        // Another device saved after us — reload authoritative blob so we
+        // don't overwrite it.
+        try {
+          const fresh = await loadServerVault(passwordRef.current!);
+          versionRef.current = fresh.version;
+          loadDoc(fresh.doc);
+          setDialog({
+            type: 'error',
+            message: 'Başka bir cihazdan daha yeni bir kayıt gelmişti — ' +
+              'sunucudaki son sürümü yükledik. Değişikliklerini tekrar uygulaman gerekebilir.',
+          });
+        } catch (e2: any) {
+          setDialog({ type: 'error', message: 'Çakışma çözümlenemedi: ' + (e2?.message ?? String(e2)) });
+        }
+      } else {
+        setDialog({ type: 'error', message: 'Kayıt hatası: ' + (e?.message ?? String(e)) });
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vaultMode]);
 
   const onCreateVault = async (data: OnboardingData) => {
-    passwordRef.current = data.password;
-    // Apply onboarding data (company name + optional logo) to the fresh doc
-    // before the first encrypted save.
+    // Apply onboarding data (company name + optional logo) BEFORE the first save.
     const setMeta = useOrgStore.getState().updateMeta;
     const patch: any = {};
     if (data.orgName) patch.orgName = data.orgName;
     if (data.logoDataUrl) { patch.logoUrl = data.logoDataUrl; patch.showLogo = true; }
     if (Object.keys(patch).length) setMeta(patch);
-    await saveVault(useOrgStore.getState().doc, data.password);
+
+    const newVer = await saveServerVault(
+      useOrgStore.getState().doc,
+      data.password,
+      null,   // no version yet — first PUT
+    );
+    passwordRef.current = data.password;
+    versionRef.current = newVer;
     setVaultMode('unlocked');
     markSaved();
   };
 
   const onUnlockVault = async (data: OnboardingData) => {
-    const d = await loadVault(data.password);
+    const { doc: d, version } = await loadServerVault(data.password);
     passwordRef.current = data.password;
+    versionRef.current = version;
     loadDoc(d);
     setVaultMode('unlocked');
   };
 
   const lock = () => {
     passwordRef.current = null;
+    versionRef.current = null;
     setVaultMode('unlock');
   };
 
@@ -214,13 +250,24 @@ export default function App() {
     return <div style={{ padding: 40 }}>Yükleniyor…</div>;
   }
 
+  if (vaultMode === 'fatal') {
+    return (
+      <div style={{ maxWidth: 480, margin: '80px auto', padding: 32, fontFamily: 'Roboto, sans-serif' }}>
+        <h2 style={{ color: '#C8102E' }}>Uygulama başlatılamadı</h2>
+        <p style={{ color: '#374151', lineHeight: 1.5 }}>{fatalMsg}</p>
+        <button
+          onClick={() => location.reload()}
+          style={{ padding: '8px 14px', background: '#1F3B73', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+        >Sayfayı Yenile</button>
+      </div>
+    );
+  }
+
   if (vaultMode === 'create' || vaultMode === 'unlock') {
     return (
       <LockScreen
         mode={vaultMode}
-        meta={readMeta() ?? undefined}
         onSubmit={vaultMode === 'create' ? onCreateVault : onUnlockVault}
-        onSkip={vaultMode === 'create' ? () => setVaultMode('skip') : undefined}
       />
     );
   }
