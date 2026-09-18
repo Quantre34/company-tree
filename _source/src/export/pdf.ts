@@ -155,18 +155,24 @@ export async function renderPdf(doc: OrgDoc, opts: PdfOptions = {}): Promise<jsP
   pdf.setFont('Roboto', 'normal');
   pdf.setFontSize(10);
   pdf.setTextColor(80);
-  pdf.text(`${doc.meta.orgName} · ${new Date(doc.meta.updatedAt).toLocaleDateString('tr-TR')}`, marginX, 52);
+  const parsedDate = doc.meta.updatedAt ? new Date(doc.meta.updatedAt) : null;
+  const dateStr = parsedDate && !isNaN(parsedDate.getTime())
+    ? parsedDate.toLocaleDateString('tr-TR') : '';
+  pdf.text(`${doc.meta.orgName}${dateStr ? ' · ' + dateStr : ''}`, marginX, 52);
 
-  // Logo at corner (loaded async)
+  // Logo at corner (loaded async). Guard against SVG logos that report 0×0
+  // in Safari — they'd divide-by-zero into a NaN target height.
   if (showLogo && logoUrl) {
     try {
       const img = await loadImage(logoUrl);
-      const targetW = pw * logoWidthPct;
-      const targetH = targetW * (img.naturalHeight / img.naturalWidth);
-      const margin = 24;
-      const x = logoCorner.includes('l') ? margin : pw - margin - targetW;
-      const y = logoCorner.startsWith('t') ? margin : ph - margin - targetH;
-      pdf.addImage(img.dataUrl, 'PNG', x, y, targetW, targetH);
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        const targetW = pw * logoWidthPct;
+        const targetH = targetW * (img.naturalHeight / img.naturalWidth);
+        const margin = 24;
+        const x = logoCorner.includes('l') ? margin : pw - margin - targetW;
+        const y = logoCorner.startsWith('t') ? margin : ph - margin - targetH;
+        pdf.addImage(img.dataUrl, 'PNG', x, y, targetW, targetH);
+      }
     } catch (e) {
       console.warn('Logo yüklenemedi:', e);
     }

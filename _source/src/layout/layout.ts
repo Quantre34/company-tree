@@ -69,42 +69,59 @@ export function layout(doc: OrgDoc): LayoutResult {
 
   interface Extent { w: number; h: number; }
   const extent = new Map<string, Extent>();
+  // Cycle guard — imported / hand-edited docs could contain a parentId loop.
+  // If we detect one, we return a leaf-sized extent for the offending node
+  // so layout produces a defined result instead of overflowing the stack.
+  const extentVisiting = new Set<string>();
 
   function computeExtent(id: string): Extent {
     const cached = extent.get(id);
     if (cached) return cached;
-    const n = byId.get(id)!;
-    const s = size.get(id)!;
-    const kids = n.collapsed ? [] : (childrenMap.get(id) ?? []);
-    if (kids.length === 0) {
-      const e = { w: s.w, h: s.h };
+    const n = byId.get(id);
+    const s = size.get(id);
+    if (!n || !s) return { w: 0, h: 0 };
+    if (extentVisiting.has(id)) return { w: s.w, h: s.h };
+    extentVisiting.add(id);
+    try {
+      const kids = n.collapsed ? [] : (childrenMap.get(id) ?? []);
+      if (kids.length === 0) {
+        const e = { w: s.w, h: s.h };
+        extent.set(id, e);
+        return e;
+      }
+      const mode = n.layoutMode ?? defaultMode;
+      let e: Extent;
+      if (mode === 'horizontal') {
+        const kidExts = kids.map(k => computeExtent(k.id));
+        const totalW = kidExts.reduce((a, x) => a + x.w, 0) + (kids.length - 1) * H_GAP;
+        const maxKidH = Math.max(...kidExts.map(x => x.h));
+        e = { w: Math.max(s.w, totalW), h: s.h + V_GAP + maxKidH };
+      } else {
+        const kidExts = kids.map(k => computeExtent(k.id));
+        const maxKidW = Math.max(...kidExts.map(x => x.w));
+        const totalH = kidExts.reduce((a, x) => a + x.h, 0) + (kids.length - 1) * STACKED_VGAP;
+        e = { w: Math.max(s.w, STACKED_INDENT + maxKidW), h: s.h + STACKED_VGAP + totalH };
+      }
       extent.set(id, e);
       return e;
+    } finally {
+      extentVisiting.delete(id);
     }
-    const mode = n.layoutMode ?? defaultMode;
-    let e: Extent;
-    if (mode === 'horizontal') {
-      const kidExts = kids.map(k => computeExtent(k.id));
-      const totalW = kidExts.reduce((a, x) => a + x.w, 0) + (kids.length - 1) * H_GAP;
-      const maxKidH = Math.max(...kidExts.map(x => x.h));
-      e = { w: Math.max(s.w, totalW), h: s.h + V_GAP + maxKidH };
-    } else {
-      const kidExts = kids.map(k => computeExtent(k.id));
-      const maxKidW = Math.max(...kidExts.map(x => x.w));
-      const totalH = kidExts.reduce((a, x) => a + x.h, 0) + (kids.length - 1) * STACKED_VGAP;
-      e = { w: Math.max(s.w, STACKED_INDENT + maxKidW), h: s.h + STACKED_VGAP + totalH };
-    }
-    extent.set(id, e);
-    return e;
   }
 
   const boxes: PositionedBox[] = [];
   const edges: Edge[] = [];
   const boxById = new Map<string, PositionedBox>();
 
+  const placeVisiting = new Set<string>();
   function place(id: string, x: number, y: number) {
-    const n = byId.get(id)!;
-    const s = size.get(id)!;
+    // Cycle-safety: if we ever recurse into the same id, stop instead of
+    // recursing forever (a malformed doc with a parentId loop).
+    if (placeVisiting.has(id) || boxById.has(id)) return;
+    placeVisiting.add(id);
+    const n = byId.get(id);
+    const s = size.get(id);
+    if (!n || !s) { placeVisiting.delete(id); return; }
     const ext = computeExtent(id);
     const kids = n.collapsed ? [] : (childrenMap.get(id) ?? []);
     const hasKids = kids.length > 0;
@@ -157,6 +174,7 @@ export function layout(doc: OrgDoc): LayoutResult {
         cy += computeExtent(k.id).h + STACKED_VGAP;
       }
     }
+    placeVisiting.delete(id);
   }
 
   const root = nodes.find(n => n.parentId === null && !n.unattached);
@@ -164,10 +182,22 @@ export function layout(doc: OrgDoc): LayoutResult {
 
   // Floating nodes: run a sub-tree layout starting at each unattached node's
   // own coordinates. Descendants come along so a whole detached subtree stays
-  // visually cohesive during / after a drag.
+  // visually cohesive during / after a drag. When the floating node has
+  // horizontal children, the internal centering shifts its own x — undo that
+  // shift up-front so `node.x` in the box ends up exactly at unattached.x
+  // (otherwise the box "jumps" the instant a drag starts).
   for (const n of nodes) {
     if (!n.unattached) continue;
-    place(n.id, n.unattached.x, n.unattached.y);
+    const s = size.get(n.id);
+    if (!s) continue;
+    const kids = n.collapsed ? [] : (childrenMap.get(n.id) ?? []);
+    const mode = kids.length > 0 ? (n.layoutMode ?? defaultMode) : 'horizontal';
+    let startX = n.unattached.x;
+    if (kids.length > 0 && mode === 'horizontal') {
+      const ext = computeExtent(n.id);
+      startX = n.unattached.x - Math.round((ext.w - s.w) / 2);
+    }
+    place(n.id, startX, n.unattached.y);
   }
 
   let maxX = 0, maxY = 0;

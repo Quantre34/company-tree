@@ -35,6 +35,7 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
   const selectedId = useOrgStore(s => s.selectedId);
   const select = useOrgStore(s => s.select);
   const setUnattachedPosition = useOrgStore(s => s.setUnattachedPosition);
+  const commitFloatingPosition = useOrgStore(s => s.commitFloatingPosition);
   const attachFloatingAsChild = useOrgStore(s => s.attachFloatingAsChild);
   const detachToFloating = useOrgStore(s => s.detachToFloating);
 
@@ -46,6 +47,7 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
   const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
   const [dragState, setDragState] = useState<DragState | null>(null);
   const pendingDrag = useRef<PendingDrag | null>(null);
+  const capturedPointerId = useRef<number | null>(null);
 
   const fitToView = () => {
     const wrap = wrapRef.current;
@@ -68,10 +70,12 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result.bounds.w, result.bounds.h]);
 
-  // Descendants of the currently-dragged node — excluded from drop targets so
-  // you can't drop a subtree onto its own child (which would create a cycle).
-  const draggedDescendants = useMemo(() => {
-    if (!dragState) return new Set<string>();
+  // Descendants of the currently-dragged node — computed once at drag start.
+  // Stored in a ref (not a memo on doc.nodes) so mid-drag position updates
+  // don't re-run this O(N) walk on every pointermove.
+  const draggedDescendants = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!dragState) { draggedDescendants.current = new Set(); return; }
     const set = new Set<string>();
     const stack = [dragState.id];
     while (stack.length) {
@@ -81,8 +85,9 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
         if (n.parentId === cur) stack.push(n.id);
       }
     }
-    return set;
-  }, [dragState, doc.nodes]);
+    draggedDescendants.current = set;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragState?.id]);
 
   // ---- Pan (empty canvas) ----
   const panState = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
@@ -92,9 +97,28 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
     const isEmpty = tgt.tagName.toLowerCase() === 'svg' || !!tgt.closest('.canvas-bg');
     if (!isEmpty) return;
     panState.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {/* ignore */}
+    captureOnWrap(e.pointerId);
     select(null);
     onSelectionEmpty?.();
+  };
+
+  // Capture pointer on the WRAP div (not on SVG child) — Safari pointer capture
+  // on SVG <g> is unreliable and drops moves once the pointer leaves the box.
+  const captureOnWrap = (pointerId: number) => {
+    const el = wrapRef.current;
+    if (!el) return;
+    try {
+      el.setPointerCapture(pointerId);
+      capturedPointerId.current = pointerId;
+    } catch { /* ignore */ }
+  };
+  const releaseCaptureIfAny = () => {
+    const el = wrapRef.current;
+    const pid = capturedPointerId.current;
+    if (el && pid != null) {
+      try { el.releasePointerCapture(pid); } catch { /* ignore */ }
+    }
+    capturedPointerId.current = null;
   };
 
   // ---- Node pointer-down (any draggable node) ----
@@ -103,7 +127,7 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
     if (!box) return;
     // Root (parentId=null AND not floating) cannot be dragged.
     if (box.node.parentId === null && !box.node.unattached) return;
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {/* ignore */}
+    captureOnWrap(e.pointerId);
     pendingDrag.current = {
       id,
       startClientX: e.clientX,
@@ -140,7 +164,7 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
         const localY = e.clientY - rect.top;
         const svgX = (localX - view.tx) / view.scale;
         const svgY = (localY - view.ty) / view.scale;
-        const target = findDropTarget(svgX, svgY, draggedDescendants);
+        const target = findDropTarget(svgX, svgY, draggedDescendants.current);
         if (target !== dragState.hoverTargetId) {
           setDragState({ ...dragState, hoverTargetId: target });
         }
@@ -183,41 +207,56 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
     setView(v => ({ ...v, tx: ps.tx + ddx, ty: ps.ty + ddy }));
   };
 
-  const onPointerUp = (e: React.PointerEvent) => {
+  const onPointerUp = () => {
     if (dragState) {
-      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {/* ignore */}
+      releaseCaptureIfAny();
       if (dragState.hoverTargetId) {
         attachFloatingAsChild(dragState.id, dragState.hoverTargetId);
+      } else {
+        // Drag ended without a target — snapshot the final floating position
+        // so it survives autosave / undo.
+        commitFloatingPosition(dragState.id);
       }
       setDragState(null);
       return;
     }
     // Pure click on a node without drag → select it
     if (pendingDrag.current) {
-      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {/* ignore */}
+      releaseCaptureIfAny();
       select(pendingDrag.current.id);
       pendingDrag.current = null;
       return;
     }
     if (panState.current) {
-      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {/* ignore */}
+      releaseCaptureIfAny();
       panState.current = null;
     }
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape' && dragState) {
-      // Cancel drag — leave node in whatever floating position it's in.
+      // Cancel drag: release capture and undo the detach snapshot so the node
+      // returns to its previous tree position.
+      releaseCaptureIfAny();
+      const wasDetach = !!useOrgStore.getState().past.length;
+      if (wasDetach) useOrgStore.getState().undo();
       setDragState(null);
+      pendingDrag.current = null;
     }
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    if (dragState) return;
-    if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) > 0) {
-      const delta = -e.deltaY;
-      const factor = Math.exp(delta * 0.0015);
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  // Wheel via native listener — React attaches wheel as passive by default in
+  // recent versions, and passive listeners can't call preventDefault(). Without
+  // preventDefault, the page scrolls behind the canvas while zooming.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const handler = (e: WheelEvent) => {
+      // Only intercept wheel that would otherwise scroll the page.
+      if (e.deltaY === 0 && e.deltaX === 0) return;
+      e.preventDefault();
+      const factor = Math.exp(-e.deltaY * 0.0015);
+      const rect = wrap.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
       setView(v => {
@@ -229,8 +268,10 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
           ty: py - (py - v.ty) * k,
         };
       });
-    }
-  };
+    };
+    wrap.addEventListener('wheel', handler, { passive: false });
+    return () => wrap.removeEventListener('wheel', handler);
+  }, []);
 
   const zoomBy = (factor: number) => {
     const wrap = wrapRef.current;
@@ -259,7 +300,6 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onKeyDown={onKeyDown}
-      onWheel={onWheel}
       tabIndex={-1}
       style={{ background: theme.canvasBg }}
     >

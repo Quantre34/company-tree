@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { PositionedBox } from '../layout/layout';
 import { FONT_SIZE_TITLE, FONT_SIZE_SUBTITLE, FONT_SIZE_PEOPLE, PAD_X, TITLE_LINE_H, SUBTITLE_LINE_H, PEOPLE_LINE_H } from '../layout/constants';
 import type { Theme } from '../types/org';
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function NodeBox({ box, theme, selected, onSelect, onAddChild, interactive = true, onFloatingPointerDown, dropTarget, ghosting }: Props) {
+  const uid = useId();
   const n = box.node;
   const style = n.style ?? {};
   const rx = style.shape === 'sharp' ? 0 : style.shape === 'pill' ? Math.min(box.h / 2, 20) : 10;
@@ -83,9 +85,13 @@ export function NodeBox({ box, theme, selected, onSelect, onAddChild, interactiv
 
       {!inner.hasBanner && renderTitleSection(box, textColor, theme)}
       {renderSubtitleSection(box, textColor, theme)}
-      {inner.imageBox && style.image && (
+      {inner.imageBox && style.image && (() => {
+        // Unique-per-mount clip id so Canvas and PdfPreview (which mount the
+        // SAME box id in different SVGs concurrently) don't clash in Firefox.
+        const clipId = `clip_${uid.replace(/[^A-Za-z0-9_-]/g, '_')}_${box.id}`;
+        return (
         <g>
-          <clipPath id={`clip_${box.id}`}>
+          <clipPath id={clipId}>
             <rect x={inner.imageBox.x} y={inner.imageBox.y} width={inner.imageBox.w} height={inner.imageBox.h} rx={4} ry={4} />
           </clipPath>
           <image
@@ -95,7 +101,7 @@ export function NodeBox({ box, theme, selected, onSelect, onAddChild, interactiv
             height={inner.imageBox.h}
             href={style.image}
             preserveAspectRatio={style.imageMode === 'contain' ? 'xMidYMid meet' : 'xMidYMid slice'}
-            clipPath={`url(#clip_${box.id})`}
+            clipPath={`url(#${clipId})`}
           />
           <rect
             x={inner.imageBox.x} y={inner.imageBox.y}
@@ -103,7 +109,8 @@ export function NodeBox({ box, theme, selected, onSelect, onAddChild, interactiv
             rx={4} ry={4} fill="none" stroke="#E4E7EC"
           />
         </g>
-      )}
+        );
+      })()}
       {renderPeopleSection(box, textColor, theme)}
 
       {interactive && onAddChild && (

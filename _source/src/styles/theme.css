@@ -178,8 +178,14 @@ label {
   position: relative;
   overflow: hidden;
   background: var(--canvas-bg);
+  /* Prevents mobile browsers from stealing the pointer for page scroll /
+     pinch-zoom during a drag on the canvas. */
+  touch-action: none;
+  outline: none;
 }
 .canvas-wrap svg { display: block; }
+/* Grabbing cursor persists while a drag is active */
+.node-shell.draggable:active { cursor: grabbing; }
 
 .canvas-controls {
   position: absolute; left: 14px; bottom: 14px;

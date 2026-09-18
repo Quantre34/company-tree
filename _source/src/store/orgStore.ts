@@ -38,7 +38,10 @@ interface OrgState {
   addChild: (parentId: string, type?: NodeType) => string;
   addSibling: (nodeId: string, type?: NodeType) => string | null;
   addFloating: (at: { x: number; y: number }, type?: NodeType) => string;
+  /** Mid-drag ephemeral position update — no history snapshot, no dirty flag. */
   setUnattachedPosition: (id: string, x: number, y: number) => void;
+  /** Snapshot + mark dirty for the current floating position (drag ended without a target). */
+  commitFloatingPosition: (id: string) => void;
   attachFloatingAsChild: (id: string, parentId: string) => void;
   /** Detach a tree node into floating state at (x,y). No-op for root. */
   detachToFloating: (id: string, at: { x: number; y: number }) => void;
@@ -156,14 +159,28 @@ export const useOrgStore = create<OrgState>((set, get) => {
     },
 
     setUnattachedPosition: (id, x, y) => {
-      // Frequent (per-pointermove) updates — skip history snapshot; the final
-      // release will snapshot via attachFloatingAsChild or user editing.
-      mutate(s => {
-        const n = s.doc.nodes.find(x => x.id === id);
+      // Frequent (per-pointermove) updates. Bypasses `mutate()` because that
+      // also flips `dirty=true`, which would re-arm the 2-second autosave
+      // timer on every pointermove — PBKDF2(SHA-256, 250k) runs on the whole
+      // doc, so the tab would lock for seconds the moment the user pauses.
+      // We keep the update local to the doc; `commitFloatingPosition` or the
+      // attach action snapshots the final state for undo + autosave.
+      const state = get();
+      set(produce(state, s => {
+        const n = s.doc.nodes.find(nn => nn.id === id);
         if (!n || !n.unattached) return;
         n.unattached.x = Math.round(x);
         n.unattached.y = Math.round(y);
-      }, false);
+      }));
+    },
+
+    commitFloatingPosition: (id) => {
+      // Snapshot the current floating position for undo + trigger autosave.
+      // Body is a no-op edit; mutate(_, true) records history + sets dirty.
+      const state = get();
+      const n = state.doc.nodes.find(nn => nn.id === id);
+      if (!n || !n.unattached) return;
+      mutate(_ => { /* no content change; snapshot only */ }, true);
     },
 
     detachToFloating: (id, at) => {
