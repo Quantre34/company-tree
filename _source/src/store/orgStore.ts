@@ -27,9 +27,19 @@ interface OrgState {
   dirty: boolean;
   past: OrgDoc[];
   future: OrgDoc[];
+  /** True while the user is actively dragging a node — polling should pause. */
+  isDragging: boolean;
+  setDragging: (v: boolean) => void;
 
   select: (id: string | null) => void;
   loadDoc: (doc: OrgDoc) => void;
+  /**
+   * Apply a doc pulled from the server sync loop. Unlike `loadDoc`, this
+   * pushes the previous local doc onto the undo stack so the user can
+   * Ctrl-Z back after an unexpected remote update; selection is cleared
+   * if the selected node no longer exists in the incoming doc.
+   */
+  applyRemote: (doc: OrgDoc) => void;
   markSaved: () => void;
 
   updateNode: (id: string, patch: Partial<OrgNode>, snapshot?: boolean) => void;
@@ -95,12 +105,28 @@ export const useOrgStore = create<OrgState>((set, get) => {
     dirty: false,
     past: [],
     future: [],
+    isDragging: false,
+
+    setDragging: (v) => set({ isDragging: v }),
 
     select: (id) => set({ selectedId: id }),
 
     loadDoc: (doc) => set({
       doc: cloneDoc(doc), selectedId: null, past: [], future: [], dirty: false,
     }),
+
+    applyRemote: (doc) => {
+      const state = get();
+      const past = [...state.past, cloneDoc(state.doc)].slice(-HISTORY_LIMIT);
+      const stillSelectable = state.selectedId && doc.nodes.some(n => n.id === state.selectedId);
+      set({
+        doc: cloneDoc(doc),
+        selectedId: stillSelectable ? state.selectedId : null,
+        past,
+        future: [],
+        dirty: false,
+      });
+    },
 
     markSaved: () => set({ dirty: false }),
 

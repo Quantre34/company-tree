@@ -10,7 +10,9 @@ import {
   hasServerVault,
   loadServerVault,
   saveServerVault,
+  fetchServerBlob,
 } from './persistence/serverVault';
+import { decryptBlob } from './crypto/vault';
 import { hasWebCrypto, isSecureContextOk } from './crypto/vault';
 import { exportEncryptedFile, importEncryptedFile, downloadAs } from './persistence/fileVault';
 import { exportXlsx } from './export/xlsx';
@@ -32,11 +34,13 @@ type VaultMode =
 
 const AUTO_LOCK_MS = 15 * 60 * 1000;
 const AUTOSAVE_MS = 2000;
+const SYNC_POLL_MS = 20 * 1000;
 
 export default function App() {
   const doc = useOrgStore(s => s.doc);
   const dirty = useOrgStore(s => s.dirty);
   const loadDoc = useOrgStore(s => s.loadDoc);
+  const applyRemote = useOrgStore(s => s.applyRemote);
   const markSaved = useOrgStore(s => s.markSaved);
   const undo = useOrgStore(s => s.undo);
   const redo = useOrgStore(s => s.redo);
@@ -47,6 +51,8 @@ export default function App() {
   const [fatalMsg, setFatalMsg] = useState<string | null>(null);
   const passwordRef = useRef<string | null>(null);
   const versionRef = useRef<string | null>(null);
+  const savingRef = useRef(false);
+  const [remoteUpdate, setRemoteUpdate] = useState<{ doc: OrgDoc; version: string } | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [dialog, setDialog] = useState<
     | { type: 'delete'; id: string }
@@ -57,6 +63,7 @@ export default function App() {
     | null
   >(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   // Vault-check on mount — the ONLY place we probe the server.
   useEffect(() => {
@@ -103,6 +110,64 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vaultMode]);
 
+  // Cross-device sync — poll the server every SYNC_POLL_MS for a newer blob.
+  // Pauses when: tab hidden, unsaved edits, save in flight, active drag.
+  // On update: applies silently if !dirty, otherwise surfaces a banner so the
+  // user can choose to reload without losing local work.
+  useEffect(() => {
+    if (vaultMode !== 'unlocked') return;
+    let timer: number | undefined;
+    let stopped = false;
+
+    const shouldSkip = () => {
+      return document.hidden
+        || savingRef.current
+        || useOrgStore.getState().isDragging
+        || !passwordRef.current;
+    };
+
+    const tick = async () => {
+      if (stopped) return;
+      if (!shouldSkip()) {
+        try {
+          const r = await fetch('./api/tree.php', { method: 'HEAD', cache: 'no-store' });
+          if (r.ok) {
+            const ver = r.headers.get('X-Vault-Version') ?? '';
+            if (ver && ver !== versionRef.current) {
+              // A newer blob is on the server. Fetch + decrypt.
+              const got = await fetchServerBlob();
+              if (got && passwordRef.current) {
+                try {
+                  const doc = await decryptBlob<OrgDoc>(got.blob, passwordRef.current);
+                  if (useOrgStore.getState().dirty) {
+                    // Don't stomp on the user's in-progress edits.
+                    setRemoteUpdate({ doc, version: got.version });
+                  } else {
+                    versionRef.current = got.version;
+                    applyRemote(doc);
+                  }
+                } catch { /* decrypt failed — silently retry next tick */ }
+              }
+            }
+          }
+        } catch { /* network hiccup — try again next tick */ }
+      }
+      timer = window.setTimeout(tick, SYNC_POLL_MS);
+    };
+
+    // Immediately when tab becomes visible again
+    const onVis = () => { if (!document.hidden) tick(); };
+    document.addEventListener('visibilitychange', onVis);
+
+    timer = window.setTimeout(tick, SYNC_POLL_MS);
+    return () => {
+      stopped = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vaultMode]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -119,14 +184,36 @@ export default function App() {
   }, []);
 
   const doSave = useCallback(async () => {
-    if (vaultMode !== 'unlocked' || !passwordRef.current) return;
+    // Capture password locally: an auto-lock during an in-flight save must
+    // not turn passwordRef.current into null underneath us.
+    const pw = passwordRef.current;
+    if (vaultMode !== 'unlocked' || !pw) return;
+    savingRef.current = true;
     setSaveState('saving');
+
+    // Retry transient 5xx / network hiccups a couple of times so a flaky
+    // wifi doesn't pop an error dialog for every autosave.
+    const attempt = async (n: number): Promise<string> => {
+      try {
+        return await saveServerVault(
+          useOrgStore.getState().doc,
+          pw,
+          versionRef.current,
+        );
+      } catch (e: any) {
+        if (e?.code === 'CONFLICT') throw e;
+        const msg = String(e?.message ?? '');
+        const transient = /\(5\d\d\)|network|fetch/i.test(msg);
+        if (transient && n < 2) {
+          await new Promise(r => setTimeout(r, 500 * (n + 1)));
+          return attempt(n + 1);
+        }
+        throw e;
+      }
+    };
+
     try {
-      const newVer = await saveServerVault(
-        useOrgStore.getState().doc,
-        passwordRef.current,
-        versionRef.current,
-      );
+      const newVer = await attempt(0);
       versionRef.current = newVer;
       markSaved();
       setSaveState('saved');
@@ -134,16 +221,15 @@ export default function App() {
     } catch (e: any) {
       setSaveState('error');
       if (e?.code === 'CONFLICT') {
-        // Another device saved after us — reload authoritative blob so we
-        // don't overwrite it.
         try {
-          const fresh = await loadServerVault(passwordRef.current!);
+          const fresh = await loadServerVault(pw);
           versionRef.current = fresh.version;
-          loadDoc(fresh.doc);
+          applyRemote(fresh.doc);
           setDialog({
             type: 'error',
             message: 'Başka bir cihazdan daha yeni bir kayıt gelmişti — ' +
-              'sunucudaki son sürümü yükledik. Değişikliklerini tekrar uygulaman gerekebilir.',
+              'sunucudaki son sürümü yükledik. Değişikliklerin geçici olarak ' +
+              'undo (Ctrl+Z) ile geri alınabilir.',
           });
         } catch (e2: any) {
           setDialog({ type: 'error', message: 'Çakışma çözümlenemedi: ' + (e2?.message ?? String(e2)) });
@@ -151,6 +237,8 @@ export default function App() {
       } else {
         setDialog({ type: 'error', message: 'Kayıt hatası: ' + (e?.message ?? String(e)) });
       }
+    } finally {
+      savingRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vaultMode]);
@@ -284,15 +372,11 @@ export default function App() {
         onExportBackup={onExportBackup}
         onImportBackup={onImportBackup}
         onAddRootChild={() => rootId && addChild(rootId)}
-        onAddFloating={() => {
-          // Drop a new floating node roughly where the tree ends, so it's
-          // visible but doesn't overlap the root of the hierarchy.
-          const b = document.querySelector<SVGSVGElement>('.canvas-wrap svg')?.getBoundingClientRect();
-          addFloating({ x: (b ? 60 : 60), y: 60 });
-        }}
+        onAddFloating={() => addFloating({ x: 60, y: 60 })}
+        onToggleInspector={() => setInspectorOpen(v => !v)}
         saveState={saveState}
       />
-      <div className="main-split">
+      <div className={'main-split' + (inspectorOpen ? ' inspector-open' : '')}>
         <Canvas
           svgRef={svgRef}
           onAddChild={(parentId) => addChild(parentId)}
@@ -302,6 +386,18 @@ export default function App() {
           onReparentRequest={(id) => setDialog({ type: 'reparent', id })}
         />
       </div>
+
+      {remoteUpdate && (
+        <div className="sync-banner" role="status">
+          <span>Başka bir cihazdan yeni bir kayıt geldi.</span>
+          <button className="primary" onClick={() => {
+            versionRef.current = remoteUpdate.version;
+            applyRemote(remoteUpdate.doc);
+            setRemoteUpdate(null);
+          }}>Yükle</button>
+          <button className="ghost" onClick={() => setRemoteUpdate(null)}>Sonra</button>
+        </div>
+      )}
 
       {dialog?.type === 'delete' && (
         <DeleteDialog nodeId={dialog.id} onClose={() => setDialog(null)} />

@@ -44,8 +44,15 @@ if (!is_dir($dataDir)) {
     @mkdir($dataDir, 0700, true);
 }
 
+// Version = mtime + 6-char content hash. Adding the hash defeats the
+// same-second-collision failure mode where two saves within one second get
+// the same mtime — the client would then miss the 409 and silently overwrite.
 function version_of(string $file): string {
-    return file_exists($file) ? (string)filemtime($file) : '';
+    if (!file_exists($file)) return '';
+    $mt = (string)filemtime($file);
+    $sz = (string)filesize($file);
+    $hash = substr(md5_file($file) ?: '000000', 0, 6);
+    return $mt . '-' . $sz . '-' . $hash;
 }
 
 function fail(int $code, string $msg): void {
@@ -84,29 +91,48 @@ if ($method === 'PUT') {
         fail(400, 'invalid vault format');
     }
 
-    // Optimistic concurrency
+    // Serialise the read-version → write pair with a sidecar advisory lock.
+    // Without this, two concurrent PUTs can both pass the version check and
+    // then race the rename, silently losing one save.
+    $lockPath = $dataDir . '/vault.lock';
+    $lockFp = @fopen($lockPath, 'c');
+    if ($lockFp === false) fail(500, 'lock open failed');
+    if (!flock($lockFp, LOCK_EX)) {
+        fclose($lockFp);
+        fail(500, 'lock failed');
+    }
+
+    // Optimistic concurrency — re-read version INSIDE the lock.
     $expected = $_SERVER['HTTP_IF_MATCH'] ?? '';
     $current  = version_of($path);
-    if ($current !== '' && $expected !== '' && $expected !== $current) {
+    $conflict = ($current !== '' && $expected !== '' && $expected !== $current);
+
+    if ($conflict) {
         http_response_code(409);
         header('Content-Type: application/json; charset=utf-8');
         header('X-Vault-Version: ' . $current);
         echo json_encode(['error' => 'version mismatch', 'currentVersion' => $current]);
-        exit;
+    } else {
+        $tmp = $path . '.tmp.' . bin2hex(random_bytes(4));
+        if (file_put_contents($tmp, $body) === false) {
+            $err = 'write failed: ' . (error_get_last()['message'] ?? 'unknown');
+            flock($lockFp, LOCK_UN); fclose($lockFp);
+            fail(500, $err);
+        }
+        if (!rename($tmp, $path)) {
+            $err = 'rename failed: ' . (error_get_last()['message'] ?? 'unknown');
+            @unlink($tmp);
+            flock($lockFp, LOCK_UN); fclose($lockFp);
+            fail(500, $err);
+        }
+        @chmod($path, 0600);
+        header('X-Vault-Version: ' . version_of($path));
+        http_response_code(204);
     }
 
-    $tmp = $path . '.tmp';
-    if (@file_put_contents($tmp, $body, LOCK_EX) === false) {
-        fail(500, 'write failed');
-    }
-    if (!@rename($tmp, $path)) {
-        @unlink($tmp);
-        fail(500, 'rename failed');
-    }
-    @chmod($path, 0600);
-
-    header('X-Vault-Version: ' . version_of($path));
-    http_response_code(204);
+    flock($lockFp, LOCK_UN);
+    fclose($lockFp);
+    exit;
     exit;
 }
 

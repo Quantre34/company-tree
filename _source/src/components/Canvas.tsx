@@ -28,7 +28,12 @@ interface PendingDrag {
   pointerId: number;
 }
 
-const DRAG_THRESHOLD_PX = 4;
+// Touch pointers wobble more than a mouse; be more forgiving so a tap
+// isn't accidentally promoted into a drag.
+const IS_COARSE = typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(pointer: coarse)').matches;
+const DRAG_THRESHOLD_PX = IS_COARSE ? 10 : 4;
 
 export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
   const doc = useOrgStore(s => s.doc);
@@ -38,6 +43,7 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
   const commitFloatingPosition = useOrgStore(s => s.commitFloatingPosition);
   const attachFloatingAsChild = useOrgStore(s => s.attachFloatingAsChild);
   const detachToFloating = useOrgStore(s => s.detachToFloating);
+  const setDragging = useOrgStore(s => s.setDragging);
 
   const result = useMemo(() => layout(doc), [doc]);
 
@@ -194,6 +200,7 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
           scaleAtStart: view.scale,
           hoverTargetId: null,
         });
+        setDragging(true);
         pendingDrag.current = null;
       }
       return;
@@ -218,6 +225,7 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
         commitFloatingPosition(dragState.id);
       }
       setDragState(null);
+      setDragging(false);
       return;
     }
     // Pure click on a node without drag → select it
@@ -241,6 +249,7 @@ export function Canvas({ onAddChild, onSelectionEmpty, svgRef }: Props) {
       const wasDetach = !!useOrgStore.getState().past.length;
       if (wasDetach) useOrgStore.getState().undo();
       setDragState(null);
+      setDragging(false);
       pendingDrag.current = null;
     }
   };

@@ -20,3 +20,9 @@ Thumbs.db
 
 # Local screenshots / references
 Screenshot*.png
+
+# PWA icons — build outputs (source in _source/public/)
+/apple-touch-icon.png
+/icon-*.png
+/icon.svg
+/manifest.webmanifest

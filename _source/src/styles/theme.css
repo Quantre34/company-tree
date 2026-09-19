@@ -580,8 +580,135 @@ label {
 }
 .inspector::-webkit-scrollbar-thumb:hover { background: #384359; }
 
+/* --- Cross-device sync banner ---------------------------------------- */
+.sync-banner {
+  position: fixed;
+  left: 50%; top: 66px;
+  transform: translateX(-50%);
+  background: #1F2839;
+  color: var(--ink-text);
+  border: 1px solid var(--ink-border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  display: flex; align-items: center; gap: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+  z-index: 40;
+  font-size: 13px;
+  max-width: calc(100vw - 32px);
+  animation: pop 180ms var(--ease);
+}
+.sync-banner button {
+  background: transparent; color: #E5E9F0;
+  border: 1px solid #3A4666; border-radius: 8px;
+  padding: 5px 12px; font-size: 12.5px; cursor: pointer;
+}
+.sync-banner button.primary {
+  background: var(--ink-accent-2); border-color: var(--ink-accent-2); color: #fff;
+}
+.sync-banner button.primary:hover { background: var(--ink-accent); }
+.sync-banner button.ghost { border-color: transparent; color: #8892A8; }
+
+/* --- Top-bar narrow-viewport overflow menu --------------------------- */
+.top-bar .brand-label { display: inline; }
+.top-bar .show-narrow { display: none; }
+.top-bar .hide-narrow { display: inline; }
+.top-bar .tb-menu-wrap { position: relative; }
+.top-bar .tb-menu {
+  position: absolute; top: calc(100% + 6px); right: 0;
+  background: #1F2839;
+  border: 1px solid var(--ink-border);
+  border-radius: 10px; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+  z-index: 30;
+  min-width: 180px;
+}
+.top-bar .tb-menu button {
+  justify-content: flex-start;
+  border: none;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-text);
+}
+.top-bar .tb-menu button:hover { background: rgba(255,255,255,0.06); transform: none; }
+
+/* --- Mobile / tablet layout ------------------------------------------ */
+@media (max-width: 820px) {
+  .app-shell { grid-template-rows: auto 1fr; }
+  .top-bar {
+    flex-wrap: nowrap; overflow-x: auto; padding: 8px 10px; gap: 6px;
+    scrollbar-width: none; -ms-overflow-style: none;
+  }
+  .top-bar::-webkit-scrollbar { display: none; }
+  .top-bar .brand-label { display: none; }
+  .top-bar .meta-title { display: none; }
+  .top-bar button { padding: 8px 10px; font-size: 12.5px; flex-shrink: 0; }
+  .top-bar .hide-narrow { display: none; }
+  .top-bar .show-narrow { display: inline; }
+
+  .main-split { grid-template-columns: 1fr; grid-template-rows: 1fr; position: relative; }
+  .inspector {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    height: min(70vh, 560px);
+    max-height: 70vh;
+    border-left: none;
+    border-top: 1px solid #0B1220;
+    border-radius: 18px 18px 0 0;
+    transform: translateY(100%);
+    transition: transform 240ms var(--ease);
+    z-index: 25;
+    box-shadow: 0 -14px 32px rgba(0,0,0,0.4);
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0));
+  }
+  .main-split.inspector-open .inspector { transform: translateY(0); }
+  .main-split.inspector-open::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: rgba(8, 12, 22, 0.45);
+    z-index: 24;
+    animation: fade-in 180ms var(--ease);
+  }
+  .canvas-controls {
+    left: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0));
+    padding: 4px;
+  }
+  .canvas-controls button { min-width: 40px; min-height: 40px; }
+  .dialog { min-width: min(320px, 100vw - 24px); max-width: min(480px, 100vw - 24px); padding: 20px; }
+  .pdf-preview {
+    max-height: 96vh;
+    border-radius: 14px 14px 0 0;
+  }
+  .pdf-preview__body { grid-template-columns: 1fr; }
+  .pdf-preview__stage { min-height: 260px; padding: 12px; }
+  .pdf-preview__actions {
+    position: sticky; bottom: 0;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+  }
+  .lock-card { width: min(380px, 100vw - 24px); padding: 24px 20px; }
+  .sync-banner { top: auto; bottom: calc(72px + env(safe-area-inset-bottom, 0)); }
+}
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Coarse pointer (touch): 44px minimum tap targets, larger form inputs. */
+@media (pointer: coarse) {
+  button, .top-bar button { min-height: 44px; }
+  .inspector input[type="text"],
+  .inspector input[type="password"],
+  .inspector input[type="email"],
+  .inspector textarea,
+  .inspector select { min-height: 42px; font-size: 14px; }
+  .inspector .type-row button { min-height: 40px; font-size: 13px; }
+  .inspector label { font-size: 12px; }
+  input[type="range"] { height: 8px; }
+  input[type="range"]::-webkit-slider-thumb { width: 28px; height: 28px; }
+}
+
 @media print {
-  .top-bar, .inspector, .canvas-controls { display: none !important; }
+  .top-bar, .inspector, .canvas-controls, .sync-banner { display: none !important; }
   .main-split { grid-template-columns: 1fr; }
   .app-shell { display: block; height: auto; }
   .canvas-wrap { overflow: visible; }

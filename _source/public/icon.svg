@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#131A28"/>
+  <rect x="60" y="60" width="392" height="392" rx="72" fill="#1F3B73"/>
+  <!-- simple tree: root + two children -->
+  <g stroke="#F1F4FB" stroke-width="14" stroke-linecap="round" fill="none">
+    <line x1="256" y1="150" x2="256" y2="220"/>
+    <line x1="176" y1="290" x2="336" y2="290"/>
+    <line x1="176" y1="290" x2="176" y2="340"/>
+    <line x1="336" y1="290" x2="336" y2="340"/>
+    <line x1="256" y1="220" x2="256" y2="290"/>
+  </g>
+  <g fill="#FFFFFF">
+    <rect x="196" y="105" width="120" height="60" rx="14"/>
+    <rect x="116" y="335" width="120" height="60" rx="14"/>
+    <rect x="276" y="335" width="120" height="60" rx="14"/>
+  </g>
+</svg>
