@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "meta": {
+    "orgName": "Şirketiniz",
+    "title": "Organizasyon Şeması",
+    "logoUrl": "./logo.png",
+    "logoCorner": "tr",
+    "logoWidthPct": 0.13,
+    "showLogo": false,
+    "updatedAt": "2026-01-01T00:00:00.000Z",
+    "theme": {
+      "primary": "#1F3B73",
+      "accent": "#C8102E",
+      "canvasBg": "#F2F3F5",
+      "nodeBg": "#FFFFFF",
+      "nodeText": "#1B2332",
+      "headerText": "#FFFFFF",
+      "linkColor": "#B9C0CC",
+      "fontFamily": "Roboto, Inter, 'Segoe UI', Arial, sans-serif"
+    },
+    "defaults": {
+      "shape": "rounded",
+      "nodeWidth": 190,
+      "hGap": 28,
+      "vGap": 56,
+      "layoutMode": "horizontal"
+    }
+  },
+  "nodes": [
+    {
+      "id": "n_root",
+      "parentId": null,
+      "order": 0,
+      "type": "role",
+      "title": "GENEL MÜDÜR",
+      "people": [],
+      "style": { "headerStyle": "plain" }
+    }
+  ]
+}
